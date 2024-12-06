@@ -1,0 +1,140 @@
+name: "Report deployment status to Slack"
+description: "Report deployment status to Slack"
+inputs:
+  project:
+    description: "The name of the project."
+    required: true
+  project_owner:
+    description: "The owner/org of the project"
+    required: false
+    default: bitwarden
+  tag:
+    description: "The name of the branch or tag."
+    required: true
+  commit-sha:
+    description: "The SHA of the branch or tag."
+    required: true
+  db_migration_detected:
+    description: "Whether a database migration was detected."
+    required: false
+    default: false
+  environment:
+    description: "The name of the environment."
+    required: true
+  slack-channel:
+    description: "The name of the Slack channel."
+    default: team-eng-qa-devops
+  update-ts:
+    description: "Message ID to update in Slack channel."
+    required: false
+  event:
+    description: "Deployment event type. Possible values are start, success, or failure."
+    required: true
+  url:
+    description: "URL of the deployment action run"
+    required: false
+    default: ${{ github.event.deployment_status.target_url }}
+  AZURE_KV_CI_SERVICE_PRINCIPAL:
+    description: "The service principal used to authenticate to Azure."
+    required: true
+outputs:
+  channel_id:
+    description: "Channel ID where the Slack message was posted"
+    value: ${{ steps.slack-message.outputs.channel_id }}
+  ts:
+    description: "Message ID of the Slack message"
+    value: ${{ steps.slack-message.outputs.ts }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Login to Azure - Prod Subscription
+      uses: Azure/login@e15b166166a8746d1a47596803bd8c1b595455cf # v1.6.0
+      with:
+        creds: ${{ inputs.AZURE_KV_CI_SERVICE_PRINCIPAL }}
+
+    - name: Retrieve Slack secrets
+      id: retrieve-slack-secrets
+      uses: bitwarden/gh-actions/get-keyvault-secrets@main
+      with:
+        keyvault: bitwarden-ci
+        secrets: "slack-bot-token"
+
+    - name: Slack message setup
+      id: setup
+      shell: bash
+      run: |
+        function slack_message_fn () {
+          local event="${{ inputs.event }}"
+          local environment="${{ inputs.environment }}"
+          local tag="${{ inputs.tag }}"
+          local project="${{ inputs.project }}"
+          local project_owner="${{ inputs.project_owner }}"
+          local url="${{ inputs.url }}"
+          local commit_sha="${{ inputs.commit-sha }}"
+
+          # This action can be called from other repositories with external refs/shas, so use the passed in project rather than github.repository
+          local repository_url="${{ github.server_url }}/$project_owner/$project"
+
+          local commit_url="$repository_url/commit/$commit_sha"
+          local tag_url="$repository_url/tree/$tag"
+
+          # Slack link format: https://api.slack.com/reference/surfaces/formatting
+          local commit_link="<$commit_url|$commit_sha>"
+          local tag_link="<$tag_url|$tag>"
+
+          case $event in
+            start)
+              SLACK_MESSAGE=":loading: Deploying $tag_link to $environment on $project.
+              $url
+              SHA: $commit_link"
+              ;;
+
+            success)
+              SLACK_MESSAGE=":white_check_mark: Deployed $tag_link to $environment on $project.
+              $url
+              SHA: $commit_link"
+              ;;
+
+            failure)
+              SLACK_MESSAGE=":x: Failed to deploy $tag_link to $environment on $project.
+              $url
+              SHA: $commit_link
+              Please retry. If the issue persists, share this message in the #team-eng-bre channel for support."
+              ;;
+
+            cancelled)
+              SLACK_MESSAGE=":hand: Cancelled deploy of $tag_link to $environment on $project.
+              $url
+              SHA: $commit_link"
+              ;;
+
+            no-changes)
+              SLACK_MESSAGE=":heavy_minus_sign: No changes were made for $tag_link deployment to $environment on $project.
+              $url
+              SHA: $commit_link"
+              ;;
+          esac
+        }
+
+        if [[ ${{ inputs.db_migration_detected }} == true && ${{ inputs.tag }} != main && ${{ inputs.tag }} != rc && ${{ inputs.tag }} != hotfix-rc ]]; then
+          slack_message_fn
+          SLACK_MESSAGE="$SLACK_MESSAGE
+          :red_siren: This branch has new database migration changes."
+        else
+          slack_message_fn
+        fi
+
+        echo 'slack_message<<EOF' >> $GITHUB_OUTPUT
+        echo "$SLACK_MESSAGE" >> $GITHUB_OUTPUT
+        echo 'EOF' >> $GITHUB_OUTPUT
+
+    - name: Post/Edit message to a Slack channel
+      id: slack-message
+      uses: slackapi/slack-github-action@37ebaef184d7626c5f204ab8d3baff4262dd30f0 # v1.27.0
+      with:
+        channel-id: ${{ inputs.slack-channel }}
+        slack-message: ${{ steps.setup.outputs.slack_message }}
+        update-ts: ${{ inputs.update-ts }}
+      env:
+        SLACK_BOT_TOKEN: ${{ steps.retrieve-slack-secrets.outputs.slack-bot-token }}

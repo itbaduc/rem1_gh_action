@@ -1,0 +1,53 @@
+name: "Setup Docker Trust"
+description: "Configures Docker Trust"
+inputs:
+  azure-creds:
+    description: 'Credentials for the Azure Subscription that contains the docker trust secrets'
+    required: true
+  azure-keyvault-name:
+    description: 'The name of the Key Vault with the specified secrets'
+outputs:
+  dct-delegate-repo-passphrase:
+    description: 'DCT Delegate Repository Passphrase'
+    value: ${{ steps.get-secrets.outputs.dct-delegate-repo-passphrase }}
+runs:
+  using: "composite"
+  steps:
+    - name: Check Runner OS
+      shell: bash
+      run: |
+        if ["$RUNNER_OS" != "Linux"]; then
+          echo "[!] This workflow only supports Linux runners"
+          exit 1
+        fi
+
+    - name: Login to Azure
+      uses: Azure/login@e15b166166a8746d1a47596803bd8c1b595455cf # v1.6.0
+      with:
+        creds: ${{ inputs.azure-creds }}
+
+    - name: Retrieve secrets
+      id: get-secrets
+      uses: bitwarden/gh-actions/get-keyvault-secrets@main
+      with:
+        keyvault: "${{ inputs.azure-keyvault-name }}"
+        secrets: "docker-password,
+          docker-username,
+          dct-delegate-repo-passphrase,
+          dct-delegate-key"
+
+    - name: Log into Docker
+      shell: bash
+      env:
+        DOCKER_USERNAME: ${{ steps.get-secrets.outputs.docker-username }}
+        DOCKER_PASSWORD: ${{ steps.get-secrets.outputs.docker-password }}
+      run: echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
+    - name: Setup Docker Trust
+      shell: bash
+      env:
+        DCT_DELEGATION_KEY_ID: "c9bde8ec820701516491e5e03d3a6354e7bd66d05fa3df2b0062f68b116dc59c"
+        DCT_DELEGATE_KEY: ${{ steps.get-secrets.outputs.dct-delegate-key }}
+      run: |
+        mkdir -p ~/.docker/trust/private
+        echo "$DCT_DELEGATE_KEY" > ~/.docker/trust/private/$DCT_DELEGATION_KEY_ID.key

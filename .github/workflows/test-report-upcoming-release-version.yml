@@ -1,0 +1,21 @@
+name: Test report-upcoming release version to Slack
+on:
+  pull_request:
+      paths:
+      - "report-upcoming-release-version/**"
+      - ".github/workflows/test-report-upcoming-release-version.yml"
+
+jobs:
+  test-report-upcoming-release-version:
+    name: Test report upcoming release version to Slack
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Report upcoming release version to Slack
+        uses: ./report-upcoming-release-version
+        with:
+          project: bitwarden/server
+          version: upcoming_version
+          slack-channel: bre-alerts-test
+          AZURE_KV_CI_SERVICE_PRINCIPAL: ${{ secrets.AZURE_KV_CI_SERVICE_PRINCIPAL }}

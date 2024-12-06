@@ -1,0 +1,32 @@
+name: CI-Lint
+
+on:
+  pull_request:
+    paths:
+      - "lint-workflow/**"
+      - "lint-workflow-v2/**"
+  workflow_dispatch: {}
+
+jobs:
+  ci-lint:
+    name: CI workflow-linter (v1)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        working-directory: lint-workflow
+        run: |
+          python -m pip install --upgrade pip
+          pip install pipenv
+          pipenv install --dev
+
+      - name: Test lint
+        working-directory: lint-workflow
+        run: pipenv run pytest tests
